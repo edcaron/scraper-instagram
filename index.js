@@ -30,16 +30,16 @@ const self = {
 			let body = '';
 			res.on('data', chunk => body += chunk);
 			res.on('end', () => {
-				if(res.statusCode !== 200){
-					switch(res.statusCode){
+				if (res.statusCode !== 200) {
+					switch (res.statusCode) {
 						case 302: {
-							switch(res.headers.location){
+							switch (res.headers.location) {
 								case insta + 'accounts/login/':
 									return reject(429);
 								case insta + 'accounts/login/?next=/accounts/edit/%3F__a%3D1':
 									return reject(401);
 								default: {
-									if(res.headers.location.startsWith(insta + 'challenge/?next='))
+									if (res.headers.location.startsWith(insta + 'challenge/?next='))
 										return reject(409);
 									reject(res.statusCode);
 								}
@@ -49,15 +49,15 @@ const self = {
 						default: reject(res.statusCode);
 					}
 				}
-				else if(tryParse){
+				else if (tryParse) {
 					try {
 						resolve(Object.values(JSON.parse(body)['graphql'] || JSON.parse(body))[0]);
 					}
-					catch(_){
+					catch (_) {
 						try {
 							resolve(Object.values(Object.values(JSON.parse(body.match(/_sharedData = (.+);/)[1])['entry_data'])[0][0]['graphql'])[0]);
 						}
-						catch(_){
+						catch (_) {
 							reject(406);
 						}
 					}
@@ -96,59 +96,35 @@ const self = {
 		mentions: comment['node']['text'].match(self.usernamesRegex),
 		likes: comment['node']['edge_liked_by']['count']
 	}),
-	fullPost: post => {
+	fullPost: postParam => {
+		const post = postParam[0];
 		const
-			caption = post['edge_media_to_caption']['edges'].length > 0
-				? post['edge_media_to_caption']['edges'][0]['node']['text'] : null,
-			username = post['owner']['username'],
-			shortcode = post['shortcode'];
+			caption = post['caption'] ? post['caption']['text'] : null,
+			shortcode = post['code'],
+			username = post['user']['username'];
 		return {
 			shortcode,
 			author: {
-				id: post['owner']['id'],
+				id: post['user']['pk'],
 				username,
-				name: post['owner']['full_name'],
-				pic: post['owner']['profile_pic_url'],
-				verified: post['owner']['is_verified'],
-				link: `${ insta }/${ username }`
+				name: post['user']['full_name'],
+				pic: post['user']['profile_pic_url'],
+				verified: post['user']['is_verified'],
+				link: `${insta}/${username}`
 			},
 			location: post['location'] ? {
-				id: post['location']['id'],
+				id: post['location']['pk'],
 				name: post['location']['name'],
 				...(post['location']['address_json'] ? {
 					city: JSON.parse(post['location']['address_json'])['city_name']
 				} : {})
 			} : null,
-			...(post['__typename'] === 'GraphImage' ? {
-				contents: [{
-					type: 'photo',
-					url: post['display_url']
-				}]
+			...(self.getPostContent(post)),
+			...(post['usertags'] ? {
+				tagged: post['usertags']['in']
+					.map(u => u['user']['pk'])
 			} : {}),
-			...(post['__typename'] === 'GraphVideo' ? {
-				contents: [{
-					type: 'video',
-					url: post['video_url'],
-					thumbnail: post['display_url'],
-					views: post['video_view_count']
-				}]
-			} : {}),
-			...(post['__typename'] === 'GraphSidecar' ? {
-				contents: post['edge_sidecar_to_children']['edges']
-					.map(content => ({
-						type: content['node']['is_video'] ? 'video' : 'photo',
-						url: content['node']['is_video'] ? content['node']['video_url'] : content['node']['display_url'],
-						...(content['node']['is_video'] ? {
-							thumbnail: content['node']['display_url'],
-							views: content['node']['video_view_count']
-						} : {})
-					}))
-			} : {}),
-			...(post['edge_media_to_tagged_user'] ? {
-				tagged: post['edge_media_to_tagged_user']['edges']
-					.map(u => u['node']['user']['username'])
-			} : {}),
-			likes: post['edge_media_preview_like']['count'],
+			likes: post['like_count'],
 			caption,
 			hashtags: caption ? caption.match(self.hashtagsRegex) : null,
 			mentions: caption ? caption.match(self.usernamesRegex) : null,
@@ -157,9 +133,47 @@ const self = {
 				comments: post['comments_disabled'] ? null : post['edge_media_preview_comment']['edges'].map(self.postComment),
 				commentCount: post['edge_media_preview_comment']['count']
 			} : {}),
-			timestamp: post['taken_at_timestamp'],
+			timestamp: post['taken_at'],
 			link: insta + 'p/' + shortcode
 		}
+	},
+	getPostContent: (post, recursive = false) => {
+		let contents = {};
+		if (typeof post['video_codec'] === 'undefined' && typeof post['carousel_media_count'] === 'undefined') {
+			contents = self.getImagePost(post);
+		} else if (typeof post['video_codec'] !== 'undefined' && typeof post['carousel_media_count'] === 'undefined') {
+			contents = self.getVideoPost(post);
+		} else if (typeof post['carousel_media'] !== 'undefined') {
+			return {
+				contents:
+					post['carousel_media'].map(content => {
+						return self.getPostContent(content, true);
+					})
+			};
+		}
+		return recursive ? contents : {'contents' : [contents]};
+	},
+	getImagePost: post => {
+		const best = self.getBestMedia(post['image_versions2']['candidates'], post['original_width'], post['original_height']);
+		return {
+			type: 'photo',
+			url: best['url']
+		};
+	},
+	getVideoPost: post => {
+		const best = self.getBestMedia(post['video_versions'], post['original_width'], post['original_height']);
+
+		return {
+			type: 'video',
+			url: best['url'],
+			thumbnail: post['image_versions2']['candidates'][0]['url'],
+			views: post['view_count']
+		};
+	},
+	getBestMedia: (posts, original_width, original_height) =>{
+		return posts.find((el) => {
+			return el.width == original_width && el.height == original_height;
+		}) ?? posts[0];
 	}
 };
 
@@ -173,15 +187,15 @@ Class public properties & methods
  */
 
 module.exports = class Insta {
-	constructor(){
+	constructor() {
 		this.sessionId = undefined;
 		this.username = undefined;
 		this.queryHashs = {};
 	}
-	authBySessionId(sessionId){
+	authBySessionId(sessionId) {
 		return new Promise((resolve, reject) => self.get('accounts/edit', sessionId)
 			.then(body => {
-				if(this.sessionId)
+				if (this.sessionId)
 					process.emitWarning('Session ID changed');
 				this.sessionId = sessionId;
 				this.username = body['username'];
@@ -189,15 +203,15 @@ module.exports = class Insta {
 			})
 			.catch(reject));
 	}
-	getAccountNotifications(){
+	getAccountNotifications() {
 		return new Promise((resolve, reject) => {
-			if(!this.sessionId) return reject(401);
+			if (!this.sessionId) return reject(401);
 			self.get('accounts/activity', this.sessionId).then(res => {
 				resolve(res['activity_feed']['edge_web_activity_feed']['edges'].map(item => item['node']).map(notification => ({
 					id: notification['id'],
 					timestamp: notification['timestamp'],
 					type: ({
-						'GraphLikeAggregatedStory' : 'like',
+						'GraphLikeAggregatedStory': 'like',
 						'GraphMentionStory': 'mention',
 						'GraphCommentMediaStory': 'comment',
 						'GraphFollowAggregatedStory': 'follow'
@@ -222,9 +236,9 @@ module.exports = class Insta {
 			}).catch(reject);
 		});
 	}
-	getAccountStories(){
+	getAccountStories() {
 		return new Promise((resolve, reject) => {
-			if(!this.sessionId) return reject(401);
+			if (!this.sessionId) return reject(401);
 			self.get('', this.sessionId, false, { __a: undefined }).then(body => {
 				self.graphQL(
 					undefined,
@@ -247,7 +261,7 @@ module.exports = class Insta {
 			}).catch(reject);
 		});
 	}
-	getProfile(username = this.username, anonymous = false){
+	getProfile(username = this.username, anonymous = false) {
 		return new Promise((resolve, reject) => self.get(username, anonymous ? null : this.sessionId)
 			.then(profile => {
 				const
@@ -285,7 +299,7 @@ module.exports = class Insta {
 				});
 			})
 			.catch(err => {
-				if(err === 204){
+				if (err === 204) {
 					this.getProfile(username, true)
 						.then(profile => resolve(Object.assign(profile, {
 							user: { blocked: true }
@@ -296,25 +310,23 @@ module.exports = class Insta {
 					reject(err);
 			}));
 	}
-	async _getProfileId(username){
-		if(!profileIds[username])
+	async _getProfileId(username) {
+		if (!profileIds[username])
 			profileIds[username] = (await this.getProfile(username)).id;
 		return profileIds[username];
 	}
-	async _getQueryHashs(){
-		if(JSON.stringify(this.queryHashs) !== '{}') return this.queryHashs;
+	async _getQueryHashs() {
+		if (JSON.stringify(this.queryHashs) !== '{}') return this.queryHashs;
 		const
 			{
 				Consumer,
-				ConsumerLibCommons,
 				TagPageContainer,
-				LocationPageContainer,
+				LocationPageContainer
 			} = Object.fromEntries([
 				...(await self.get('', this.sessionId, false, { __a: undefined }))
 					.matchAll(/static\/bundles\/.+?\/(.+?)\.js\/.+?\.js/g)
 			].map(_ => _.reverse())),
 			mainScriptBody = await self.get(Consumer, undefined, false),
-			secondaryScriptBody = await self.get(ConsumerLibCommons, undefined, false),
 			hashtagScriptBody = await self.get(TagPageContainer, undefined, false),
 			locationScriptBody = await self.get(LocationPageContainer, undefined, false),
 			localQueryIdRegex = /queryId:"([^"]+)"/;
@@ -325,20 +337,19 @@ module.exports = class Insta {
 			[, post]
 		] = [...mainScriptBody.matchAll(/queryId:"([^"]+)"/g)];
 		this.queryHashs = {
-			// story: mainScriptBody.match(/50,[a-zA-Z]="([^"]+)",/)[1],
-			anyPost: mainScriptBody.match(/RETRY_TEXT.+var [a-zA-Z]="([^"]+)",/)[1],
-			post: secondaryScriptBody.match(/queryId:"([^"]+)"/)[1],
+			story: mainScriptBody.match(/50,[a-zA-Z]="([^"]+)",/)[1],
+			post,
 			comment,
 			hashtag: hashtagScriptBody.match(localQueryIdRegex)[1],
 			location: locationScriptBody.match(localQueryIdRegex)[1]
 		};
 		return this.queryHashs;
 	}
-	getProfileStoryById(id){
+	getProfileStoryById(id) {
 		return new Promise((resolve, reject) => {
-			if(!this.sessionId) return reject(401);
+			if (!this.sessionId) return reject(401);
 			this._getQueryHashs().then(queryHashs => self.graphQL({
-				reel_ids: [ id ],
+				reel_ids: [id],
 				precomposed_overlay: false
 			}, queryHashs.story, this.sessionId).then(data => resolve(data['reels_media'][0] ? {
 				unread: data['reels_media'][0]['latest_reel_media'] !== data['reels_media'][0]['seen'],
@@ -362,7 +373,7 @@ module.exports = class Insta {
 			} : null)).catch(reject)).catch(reject);
 		});
 	}
-	getProfileStory(username = this.username){
+	getProfileStory(username = this.username) {
 		return new Promise((resolve, reject) => {
 			this._getProfileId(username)
 				.then(id =>
@@ -372,7 +383,7 @@ module.exports = class Insta {
 				.catch(reject);
 		});
 	}
-	async getProfilePostsById(profileId, maxCount, pageId){
+	async getProfilePostsById(profileId, maxCount, pageId) {
 		const res = await self.graphQL({
 			id: profileId,
 			first: maxCount,
@@ -387,10 +398,10 @@ module.exports = class Insta {
 			}
 		);
 	}
-	async getProfilePosts(profileUsername, maxCount, pageId){
+	async getProfilePosts(profileUsername, maxCount, pageId) {
 		return this.getProfilePostsById(await this._getProfileId(profileUsername), maxCount, pageId);
 	}
-	getHashtag(hashtag){
+	getHashtag(hashtag) {
 		return new Promise((resolve, reject) => {
 			const path = `explore/tags/${hashtag}`;
 			self.get(path, this.sessionId)
@@ -409,7 +420,7 @@ module.exports = class Insta {
 				.catch(reject);
 		});
 	}
-	async getHashtagPosts(hashtag, maxCount, pageId){
+	async getHashtagPosts(hashtag, maxCount, pageId) {
 		const res = await self.graphQL({
 			tag_name: hashtag,
 			first: maxCount,
@@ -424,7 +435,7 @@ module.exports = class Insta {
 			}
 		);
 	}
-	getLocation(id){
+	getLocation(id) {
 		return new Promise((resolve, reject) => {
 			const path = `explore/locations/${id}`;
 			self.get(path)
@@ -450,7 +461,7 @@ module.exports = class Insta {
 				.catch(reject);
 		});
 	}
-	async getLocationPostsById(locationId, maxCount, pageId){
+	async getLocationPostsById(locationId, maxCount, pageId) {
 		const res = await self.graphQL({
 			id: locationId,
 			first: maxCount,
@@ -465,23 +476,14 @@ module.exports = class Insta {
 			}
 		);
 	}
-	getPost(shortcode, { useGraphQL = false } = {}){
+	getPost(shortcode) {
 		return new Promise((resolve, reject) => {
-			if(useGraphQL){
-				this._getQueryHashs().then(queryHashs => {
-					self.graphQL({ shortcode }, queryHashs.anyPost, this.sessionId)
-						.then(data => resolve(self.fullPost(data['shortcode_media'])))
-						.catch(reject);
-				});
-			}
-			else {
-				self.get(`p/${shortcode}`, this.sessionId)
-					.then(post => resolve(self.fullPost(post)))
-					.catch(reject);
-			}
+			self.get(`p/${shortcode}`, this.sessionId)
+				.then(post => resolve(self.fullPost(post)))
+				.catch(reject);
 		});
 	}
-	async getPostComments(shortcode, maxCount, pageId){
+	async getPostComments(shortcode, maxCount, pageId) {
 		const res = await self.graphQL({
 			shortcode,
 			first: maxCount,
@@ -496,7 +498,7 @@ module.exports = class Insta {
 			}
 		);
 	}
-	searchProfile(query){
+	searchProfile(query) {
 		return new Promise((resolve, reject) => self.search(query, this.sessionId)
 			.then(res => resolve(res['users'].map(item => item['user']).map(profile => ({
 				username: profile['username'],
@@ -513,13 +515,13 @@ module.exports = class Insta {
 			}))))
 			.catch(reject));
 	}
-	searchHashtag(query){
+	searchHashtag(query) {
 		return new Promise((resolve, reject) => self.search(query)
 			.then(res => resolve(res['hashtags'].map(item => item['hashtag'])
 				.map(hashtag => ({ name: hashtag['name'], posts: hashtag['media_count'] }))))
 			.catch(reject));
 	}
-	searchLocation(query){
+	searchLocation(query) {
 		return new Promise((resolve, reject) => self.search(query)
 			.then(res => resolve(res['places'].map(item => item['place']['location']).map(location => ({
 				id: location['pk'],
@@ -536,23 +538,23 @@ module.exports = class Insta {
 	subscribeAccountNotifications(callback, {
 		interval = 30,
 		lastNotificationId
-	}){
+	}) {
 		let active = true;
 		const checkNewNotifications = () => {
-			if(!active) return;
+			if (!active) return;
 			(async () => {
 				try {
 					const notifications = await this.getAccountNotifications();
 					const lastNotificationIndex = notifications.findIndex(notification => notification.id === lastNotificationId);
-					if(lastNotificationIndex !== -1){
-						for(let i = lastNotificationIndex - 1; i > -1 ; i--){
+					if (lastNotificationIndex !== -1) {
+						for (let i = lastNotificationIndex - 1; i > -1; i--) {
 							callback(notifications[i]);
 						}
 					}
 					lastNotificationId = notifications[0].id;
 					setTimeout(checkNewNotifications, interval * 1000);
 				}
-				catch(err){
+				catch (err) {
 					callback(undefined, err);
 					checkNewNotifications();
 				}
@@ -569,23 +571,23 @@ module.exports = class Insta {
 		interval = 30,
 		lastPostShortcode,
 		fullPosts = false
-	} = {}){
+	} = {}) {
 		let active = true;
 		const checkNewPosts = () => {
-			if(!active) return;
+			if (!active) return;
 			(async () => {
 				try {
 					const profile = await this.getProfile(username);
 					const lastPostIndex = profile.lastPosts.findIndex(post => post.shortcode === lastPostShortcode);
-					if(lastPostIndex !== -1){
-						for(let i = lastPostIndex - 1; i > -1 ; i--){
+					if (lastPostIndex !== -1) {
+						for (let i = lastPostIndex - 1; i > -1; i--) {
 							callback(fullPosts ? (await this.getPost(profile.lastPosts[i].shortcode)) : profile.lastPosts[i]);
 						}
 					}
 					lastPostShortcode = profile.lastPosts[0].shortcode;
 					setTimeout(checkNewPosts, interval * 1000);
 				}
-				catch(err){
+				catch (err) {
 					callback(undefined, err);
 					checkNewPosts();
 				}
@@ -602,21 +604,21 @@ module.exports = class Insta {
 		interval = 30,
 		lastPostShortcode = undefined,
 		fullPosts = false
-	} = {}){
+	} = {}) {
 		let active = true;
 		const checkNewPosts = () => {
-			if(!active) return;
+			if (!active) return;
 			(async () => {
 				try {
 					const hashtag = await this.getHashtag(hashtagName);
 					const lastPostIndex = hashtag.lastPosts.findIndex(post => post.shortcode === lastPostShortcode);
-					for(let i = lastPostIndex - 1; i > -1 ; i--){
+					for (let i = lastPostIndex - 1; i > -1; i--) {
 						callback(fullPosts ? (await this.getPost(hashtag.lastPosts[i].shortcode)) : hashtag.lastPosts[i]);
 					}
 					lastPostShortcode = hashtag.lastPosts[0].shortcode;
 					setTimeout(checkNewPosts, interval * 1000);
 				}
-				catch(err){
+				catch (err) {
 					callback(undefined, err);
 					checkNewPosts();
 				}
