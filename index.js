@@ -5,7 +5,7 @@ Modules
  */
 
 const
-	https = require('https'),
+	axios = require('axios').default,
 	insta = 'https://www.instagram.com/';
 
 /*
@@ -22,51 +22,61 @@ const self = {
 	get: (path, sessionId, tryParse = true, params) => new Promise((resolve, reject) => {
 		params = JSON.stringify({ __a: sessionId ? '1' : undefined, ...params });
 		const url = insta + path + ((params !== '{}') ? ('/?' + querystring(JSON.parse(params))) : (tryParse ? '/' : ''));
-		https.get(url, {
+		axios.get(url, {
 			headers: {
-				cookie: sessionId ? `sessionid=${sessionId}` : ''
-			}
-		}, res => {
-			let body = '';
-			res.on('data', chunk => body += chunk);
-			res.on('end', () => {
-				if (res.statusCode !== 200) {
-					switch (res.statusCode) {
-						case 302: {
-							switch (res.headers.location) {
-								case insta + 'accounts/login/':
-									return reject(429);
-								case insta + 'accounts/login/?next=/accounts/edit/%3F__a%3D1':
-									return reject(401);
-								default: {
-									if (res.headers.location.startsWith(insta + 'challenge/?next='))
-										return reject(409);
-									reject(res.statusCode);
-								}
-							}
-							break;
-						}
-						default: reject(res.statusCode);
+				cookie: sessionId ? `sessionid=${sessionId}` : '',
+				'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36'
+			},
+			// maxRedirects: 1000,
+			withCredentials: true,
+			beforeRedirect: (options, { headers }) => {
+				console.log('redirectou!');
+				if (headers['set-cookie']) {
+					for (let index = 0; index < headers['set-cookie'].length; index++) {
+						const element = headers['set-cookie'][index].split(';');
+						options.headers.cookie += (';' + element[0]);
 					}
 				}
-				else if (tryParse) {
+			},
+		}).then(res => {
+			// console.log(res);
+			let body = '';
+			if (res.data) {
+				return resolve(res.data);
+			}
+			else if (res.status !== 200) {
+				switch (res.statusCode) {
+					case 302: {
+						switch (res.headers.location) {
+							case insta + 'accounts/login/':
+								return reject(429);
+							case insta + 'accounts/login/?next=/accounts/edit/%3F__a%3D1':
+								return reject(401);
+							default: {
+								if (res.headers.location.startsWith(insta + 'challenge/?next='))
+									return reject(409);
+								reject(res.statusCode);
+							}
+						}
+						break;
+					}
+					default: reject(res.statusCode);
+				}
+			}
+			else if (tryParse) {
+				try {
+					resolve(Object.values(JSON.parse(body)['graphql'] || JSON.parse(body))[0]);
+				}
+				catch (_) {
 					try {
-						resolve(Object.values(JSON.parse(body)['graphql'] || JSON.parse(body))[0]);
+						resolve(Object.values(Object.values(JSON.parse(body.match(/_sharedData = (.+);/)[1])['entry_data'])[0][0]['graphql'])[0]);
 					}
 					catch (_) {
-						try {
-							resolve(Object.values(Object.values(JSON.parse(body.match(/_sharedData = (.+);/)[1])['entry_data'])[0][0]['graphql'])[0]);
-						}
-						catch (_) {
-							reject(406);
-						}
+						reject(406);
 					}
 				}
-				else {
-					resolve(body);
-				}
-			});
-			res.on('error', reject);
+			}
+			return body;
 		});
 	}),
 	search: (query, sessionId) => new Promise((resolve, reject) => self.get('web/search/topsearch', sessionId, false, { context: 'blended', query })
@@ -151,7 +161,7 @@ const self = {
 					})
 			};
 		}
-		return recursive ? contents : {'contents' : [contents]};
+		return recursive ? contents : { 'contents': [contents] };
 	},
 	getImagePost: post => {
 		const best = self.getBestMedia(post['image_versions2']['candidates'], post['original_width'], post['original_height']);
@@ -170,7 +180,7 @@ const self = {
 			views: post['view_count']
 		};
 	},
-	getBestMedia: (posts, original_width, original_height) =>{
+	getBestMedia: (posts, original_width, original_height) => {
 		return posts.find((el) => {
 			return el.width == original_width && el.height == original_height;
 		}) ?? posts[0];
@@ -193,7 +203,7 @@ module.exports = class Insta {
 		this.queryHashs = {};
 	}
 	authBySessionId(sessionId) {
-		return new Promise((resolve, reject) => self.get('accounts/edit', sessionId)
+		return new Promise((resolve, reject) => self.get('accounts/edit', sessionId, true, { '__d': 'dis' })
 			.then(body => {
 				if (this.sessionId)
 					process.emitWarning('Session ID changed');
