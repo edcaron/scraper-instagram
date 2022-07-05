@@ -27,10 +27,8 @@ const self = {
 				cookie: sessionId ? `sessionid=${sessionId}` : '',
 				'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36'
 			},
-			// maxRedirects: 1000,
 			withCredentials: true,
 			beforeRedirect: (options, { headers }) => {
-				console.log('redirectou!');
 				if (headers['set-cookie']) {
 					for (let index = 0; index < headers['set-cookie'].length; index++) {
 						const element = headers['set-cookie'][index].split(';');
@@ -107,7 +105,7 @@ const self = {
 		likes: comment['node']['edge_liked_by']['count']
 	}),
 	fullPost: postParam => {
-		const post = postParam[0];
+		const post = postParam['items'][0];
 		const
 			caption = post['caption'] ? post['caption']['text'] : null,
 			shortcode = post['code'],
@@ -488,7 +486,7 @@ module.exports = class Insta {
 	}
 	getPost(shortcode) {
 		return new Promise((resolve, reject) => {
-			self.get(`p/${shortcode}`, this.sessionId)
+			self.get(`p/${shortcode}`, this.sessionId, true, { '__d': 'dis' })
 				.then(post => resolve(self.fullPost(post)))
 				.catch(reject);
 		});
