@@ -270,8 +270,9 @@ module.exports = class Insta {
 		});
 	}
 	getProfile(username = this.username, anonymous = false) {
-		return new Promise((resolve, reject) => self.get(username, anonymous ? null : this.sessionId)
-			.then(profile => {
+		return new Promise((resolve, reject) => self.get(username, (anonymous ? null : this.sessionId), true, { '__d': 'dis' })
+			.then(param => {
+				const profile = param.graphql.user;
 				const
 					id = profile['id'],
 					access = !profile['is_private'] || !!profile['followed_by_viewer'] || profile['username'] === this.username;
