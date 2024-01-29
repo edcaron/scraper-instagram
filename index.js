@@ -201,7 +201,7 @@ module.exports = class Insta {
 		this.queryHashs = {};
 	}
 	authBySessionId(sessionId) {
-		return new Promise((resolve, reject) => self.get('accounts/edit', sessionId, true, { '__d': 'dis' })
+		return new Promise((resolve, reject) => self.get('accounts/edit', sessionId, true)
 			.then(body => {
 				if (this.sessionId)
 					process.emitWarning('Session ID changed');
