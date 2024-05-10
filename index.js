@@ -201,15 +201,20 @@ module.exports = class Insta {
 		this.queryHashs = {};
 	}
 	authBySessionId(sessionId) {
-		return new Promise((resolve, reject) => self.get('accounts/edit', sessionId, true)
-			.then(body => {
-				if (this.sessionId)
-					process.emitWarning('Session ID changed');
-				this.sessionId = sessionId;
-				this.username = body['username'];
-				resolve(body);
-			})
-			.catch(reject));
+		return new Promise((resolve, reject) => {
+			this.sessionId = sessionId;
+			return resolve({});
+		});
+
+		// return new Promise((resolve, reject) => self.get('accounts/edit', sessionId, true)
+		// 	.then(body => {
+		// 		if (this.sessionId)
+		// 			process.emitWarning('Session ID changed');
+		// 		this.sessionId = sessionId;
+		// 		this.username = body['username'];
+		// 		resolve(body);
+		// 	})
+		// 	.catch(reject));
 	}
 	getAccountNotifications() {
 		return new Promise((resolve, reject) => {
